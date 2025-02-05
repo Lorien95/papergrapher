@@ -256,26 +256,53 @@ pg.boolean = function() {
 			return path;
 		});
 		
-		// 移除重复的路径
+		// 移除重复的路径和包含其他路径的大区域
 		var uniquePaths = [];
 		for(var i = 0; i < pathObjects.length; i++) {
+			var path1 = pathObjects[i];
+			if(!path1) continue; // 跳过已被移除的路径
+			
+			var isMinimal = true;
 			var isDuplicate = false;
-			for(var j = 0; j < uniquePaths.length; j++) {
-				if(pathObjects[i].equals(uniquePaths[j])) {
+			
+			// 检查是否是重复的路径或者包含其他更小的路径
+			for(var j = 0; j < pathObjects.length; j++) {
+				if(i === j || !pathObjects[j]) continue;
+				
+				var path2 = pathObjects[j];
+				
+				if(path1.equals(path2)) {
+					// 重复的路径
 					isDuplicate = true;
 					break;
 				}
+				
+				if(path1.contains(path2.position)) {
+					// path1 包含 path2，说明 path1 不是最小区域
+					var isFullyContained = true;
+					for(var k = 0; k < path2.segments.length; k++) {
+						if(!path1.contains(path2.segments[k].point)) {
+							isFullyContained = false;
+							break;
+						}
+					}
+					if(isFullyContained) {
+						isMinimal = false;
+						break;
+					}
+				}
 			}
-			if(!isDuplicate) {
-				uniquePaths.push(pathObjects[i]);
+			
+			if(!isDuplicate && isMinimal) {
+				uniquePaths.push(path1);
 			} else {
-				pathObjects[i].remove();
+				path1.remove();
 			}
 		}
 		
-		console.log('去重后的路径数量:', uniquePaths.length);
+		console.log('去重并移除大区域后的路径数量:', uniquePaths.length);
 		
-		// 添加去重后的路径到组
+		// 添加最小区域到组
 		uniquePaths.forEach(function(path) {
 			path.fillColor = new paper.Color(Math.random(), Math.random(), Math.random(), 0.5);
 			path.strokeColor = 'black';
