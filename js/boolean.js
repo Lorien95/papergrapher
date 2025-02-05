@@ -118,65 +118,181 @@ pg.boolean = function() {
 		
 		var group = new paper.Group();
 		
-		// 辅助函数：计算n个图形的交集
-		function getIntersection(itemIndices) {
-			if (itemIndices.length === 0) return null;
-			
-			var result = items[itemIndices[0]].clone({insert: false});
-			for (var i = 1; i < itemIndices.length; i++) {
-				result = result.intersect(items[itemIndices[i]].clone({insert: false}), {insert: false});
+		// 1. 收集所有线条的交点
+		var intersections = [];
+		for(var i = 0; i < items.length; i++) {
+			for(var j = i + 1; j < items.length; j++) {
+				var curIntersections = items[i].getIntersections(items[j]);
+				curIntersections.forEach(function(intersection) {
+					intersections.push({
+						point: intersection.point,
+						path1: items[i],
+						path2: items[j],
+						offset1: intersection.offset,
+						offset2: intersection.intersection.offset
+					});
+				});
 			}
-			
-			// 从其他所有图形中减去
-			for (var i = 0; i < items.length; i++) {
-				if (!itemIndices.includes(i)) {
-					result = result.subtract(items[i].clone({insert: false}), {insert: false});
-				}
-			}
-			
-			return result;
 		}
 		
-		// 生成所有可能的组合
-		function getCombinations(arr, k) {
-			var combinations = [];
+		console.log('找到交点数量:', intersections.length);
+		
+		// 2. 为每条路径收集所有交点，并按偏移量排序
+		var pathIntersections = new Map();
+		items.forEach(function(path) {
+			pathIntersections.set(path, []);
+		});
+		
+		intersections.forEach(function(intersection) {
+			pathIntersections.get(intersection.path1).push({
+				point: intersection.point,
+				offset: intersection.offset1
+			});
+			pathIntersections.get(intersection.path2).push({
+				point: intersection.point,
+				offset: intersection.offset2
+			});
+		});
+		
+		// 3. 分割每条路径并存储分段
+		var segments = [];
+		pathIntersections.forEach(function(points, path) {
+			points.sort(function(a, b) {
+				return a.offset - b.offset;
+			});
 			
-			function combine(start, combo) {
-				if (combo.length === k) {
-					combinations.push([...combo]);
+			if(points.length > 0) {
+				var lastPoint = path.firstSegment.point;
+				points.forEach(function(intersection) {
+					segments.push({
+						start: lastPoint,
+						end: intersection.point,
+						style: {
+							strokeColor: path.strokeColor,
+							strokeWidth: path.strokeWidth
+						}
+					});
+					lastPoint = intersection.point;
+				});
+				
+				segments.push({
+					start: lastPoint,
+					end: path.lastSegment.point,
+					style: {
+						strokeColor: path.strokeColor,
+						strokeWidth: path.strokeWidth
+					}
+				});
+			}
+		});
+		
+		// 4. 寻找闭合路径
+		function findClosedPaths(segments, intersectionPoints) {
+			var closedPaths = [];
+			var usedSegments = new Set();
+			var pathSignatures = new Set(); // 用于去重
+			
+			function getPathSignature(path) {
+				// 创建路径的唯一签名，用于去重
+				var points = path.map(p => p.segment.start.toString());
+				points.sort();
+				return points.join(',');
+			}
+			
+			function findNextSegment(point, currentPath, startPoint) {
+				// 如果回到起点，找到一个闭合路径
+				if(currentPath.length > 0 && point.equals(startPoint)) {
+					var signature = getPathSignature(currentPath);
+					if(!pathSignatures.has(signature)) {
+						pathSignatures.add(signature);
+						closedPaths.push(currentPath.slice());
+					}
 					return;
 				}
 				
-				for (var i = start; i < arr.length; i++) {
-					combo.push(i);
-					combine(i + 1, combo);
-					combo.pop();
-				}
+				// 查找连接到当前点的所有线段
+				segments.forEach(function(segment, index) {
+					if(usedSegments.has(index)) return;
+					
+					if(segment.start.equals(point)) {
+						usedSegments.add(index);
+						currentPath.push({segment: segment, reverse: false});
+						findNextSegment(segment.end, currentPath, startPoint);
+						currentPath.pop();
+						usedSegments.delete(index);
+					} else if(segment.end.equals(point)) {
+						usedSegments.add(index);
+						currentPath.push({segment: segment, reverse: true});
+						findNextSegment(segment.start, currentPath, startPoint);
+						currentPath.pop();
+						usedSegments.delete(index);
+					}
+				});
 			}
 			
-			combine(0, []);
-			return combinations;
+			// 从每个交点开始尝试寻找闭合路径
+			intersections.forEach(function(intersection) {
+				findNextSegment(intersection.point, [], intersection.point);
+			});
+			
+			return closedPaths;
 		}
 		
-		// 处理所有可能的组合（1个到n个图形的组合）
-		for (var k = 1; k <= items.length; k++) {
-			console.log('处理', k, '个图形的组合');
-			var combinations = getCombinations([...Array(items.length).keys()], k);
-			
-			for (var combo of combinations) {
-				var intersection = getIntersection(combo);
-				if (intersection && intersection.segments && intersection.segments.length > 0) {
-					intersection.strokeColor = 'black';
-					intersection.fillColor = new paper.Color(Math.random(), Math.random(), Math.random(), 0.5);
-					group.addChild(intersection);
-					console.log('添加组合:', combo, '的交集');
+		// 5. 创建闭合区域
+		var closedPaths = findClosedPaths(segments, intersections);
+		console.log('找到闭合路径数量:', closedPaths.length);
+		
+		// 创建实际的路径对象并检查重叠
+		var pathObjects = closedPaths.map(function(pathSegments) {
+			var path = new paper.Path();
+			pathSegments.forEach(function(segment) {
+				if(!segment.reverse) {
+					path.add(segment.segment.start);
+				} else {
+					path.add(segment.segment.end);
 				}
+			});
+			path.closed = true;
+			return path;
+		});
+		
+		// 移除重复的路径
+		var uniquePaths = [];
+		for(var i = 0; i < pathObjects.length; i++) {
+			var isDuplicate = false;
+			for(var j = 0; j < uniquePaths.length; j++) {
+				if(pathObjects[i].equals(uniquePaths[j])) {
+					isDuplicate = true;
+					break;
+				}
+			}
+			if(!isDuplicate) {
+				uniquePaths.push(pathObjects[i]);
+			} else {
+				pathObjects[i].remove();
 			}
 		}
 		
-		console.log('最终组中的子元素数量:', group.children.length);
+		console.log('去重后的路径数量:', uniquePaths.length);
 		
-		if (replaceWithResult) {
+		// 添加去重后的路径到组
+		uniquePaths.forEach(function(path) {
+			path.fillColor = new paper.Color(Math.random(), Math.random(), Math.random(), 0.5);
+			path.strokeColor = 'black';
+			group.addChild(path);
+		});
+		
+		// 6. 添加原始线段
+		segments.forEach(function(segment) {
+			var path = new paper.Path({
+				segments: [segment.start, segment.end],
+				strokeColor: segment.style.strokeColor,
+				strokeWidth: segment.style.strokeWidth
+			});
+			group.addChild(path);
+		});
+		
+		if(replaceWithResult) {
 			applyReplaceWithResult(items, group);
 		}
 		
